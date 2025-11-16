@@ -4,3 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+spreadsheet_lib = { path = "../spreadsheet_lib" }
