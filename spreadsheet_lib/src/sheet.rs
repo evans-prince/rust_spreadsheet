@@ -133,7 +133,7 @@ impl Sheet {
     }
 
     pub fn print_status(&self) {
-        print!("[{:.3}] ({}) > ", self.last_time, self.last_status);
+        print!("[{:.1}] ({}) > ", self.last_time, self.last_status);
     }
 
     pub fn scroll_up(&mut self) {
@@ -485,8 +485,21 @@ impl Sheet {
             for rc in c1 / 256..=c2 / 256 {
                 match self.regions.get(&(rr, rc)) {
                     None => {
-                        // region is empty → treat as all EMPTY (=0 for sum, ignored for min/max)
-                        total_cells += 256 * 256;
+                        // region is empty -> only add the INTERSECTION area
+                        let region_r_start = rr * 256;
+                        let region_r_end = region_r_start + 255;
+                        let region_c_start = rc * 256;
+                        let region_c_end = region_c_start + 255;
+
+                        let r_start = region_r_start.max(r1);
+                        let r_end = region_r_end.min(r2);
+                        let c_start = region_c_start.max(c1);
+                        let c_end = region_c_end.min(c2);
+
+                        if r_start <= r_end && c_start <= c_end {
+                            let count = (r_end - r_start + 1) * (c_end - c_start + 1);
+                            total_cells += count;
+                        }
                         continue;
                     }
                     Some(region) => {
@@ -667,8 +680,21 @@ impl Sheet {
                         );
                     }
                 } else {
-                    // block does not exist = all empty cells
-                    *total_cells += 64 * 64;
+                    // block does not exist -> only add the INTERSECTION area
+                    let block_r_start = rr * 256 + br * 64;
+                    let block_r_end = block_r_start + 63;
+                    let block_c_start = rc * 256 + bc * 64;
+                    let block_c_end = block_c_start + 63;
+
+                    let r_start = block_r_start.max(r1);
+                    let r_end = block_r_end.min(r2);
+                    let c_start = block_c_start.max(c1);
+                    let c_end = block_c_end.min(c2);
+
+                    if r_start <= r_end && c_start <= c_end {
+                        let count = (r_end - r_start + 1) * (c_end - c_start + 1);
+                        *total_cells += count;
+                    }
                 }
             }
         }
