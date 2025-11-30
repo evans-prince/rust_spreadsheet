@@ -6,6 +6,7 @@
 use super::cell::{Cell, CellValue};
 use super::region::Region;
 use crate::block::Block;
+use crate::dependency::DependencyManager;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -28,6 +29,8 @@ pub struct Sheet {
     pub output_enabled: bool,
     pub last_status: String,
     pub last_time: f64,
+
+    pub dependencies: DependencyManager,
 }
 
 impl Sheet {
@@ -41,6 +44,8 @@ impl Sheet {
             output_enabled: true,
             last_status: "ok".to_string(),
             last_time: 0.0,
+
+            dependencies: DependencyManager::new(),
         }
     }
 
@@ -155,97 +160,160 @@ impl Sheet {
     /// Handle assignment like "A1=23" or "A1=B1" or "A1=1+2" or "A1=-3*-2"
     /// `cleaned` should be input with ALL whitespace removed (execute_command already does that).
     pub fn handle_assignment(&mut self, cleaned: &str) -> Result<(), String> {
-        // cleaned might be mixed-case; make RHS handling case-insensitive for cell names
         let parts: Vec<&str> = cleaned.split('=').collect();
         if parts.len() != 2 {
             return Err("invalid_command".into());
         }
-
         let lhs = parts[0];
         let rhs = parts[1];
 
-        // parse left cell (case-insensitive inside parse_cell)
         let (row, col) = match Self::parse_cell(lhs) {
             Some(x) => x,
             None => return Err("invalid_cell".into()),
         };
 
-        // If RHS contains an operator -> evaluate simple expression
+        // 1. Collect dependencies
+        let mut new_deps = Vec::new();
+
+        if let Some((_op_pos, _op)) = Self::find_operator(rhs) {
+            let (op_pos, _) = Self::find_operator(rhs).unwrap();
+            let left_part = &rhs[..op_pos];
+            let right_part = &rhs[op_pos + 1..];
+            if let Some((r, c)) = Self::parse_cell(left_part) {
+                new_deps.push(crate::dependency::Dependency::Cell(r, c));
+            }
+            if let Some((r, c)) = Self::parse_cell(right_part) {
+                new_deps.push(crate::dependency::Dependency::Cell(r, c));
+            }
+        }
+
+        if let Some(start_paren) = rhs.find('(') {
+            if let Some(end_paren) = rhs.find(')') {
+                let inner = &rhs[start_paren + 1..end_paren];
+                if let Ok(((r1, c1), (r2, c2))) = Self::parse_range(inner) {
+                    new_deps.push(crate::dependency::Dependency::Range(r1, c1, r2, c2));
+                }
+            }
+        }
+
+        if let Some((rr, cc)) = Self::parse_cell(rhs) {
+            // Only add if it's NOT a pure number.
+            // (Assuming parse_f64 fails for "A1")
+            if rhs.parse::<f64>().is_err() {
+                new_deps.push(crate::dependency::Dependency::Cell(rr, cc));
+            }
+        }
+
+        // 2. Check for Circular References
+        for dep in &new_deps {
+            match dep {
+                crate::dependency::Dependency::Cell(r, c) => {
+                    if self
+                        .dependencies
+                        .check_circular_reference((row, col), (*r, *c))
+                    {
+                        let cell = Cell {
+                            value: CellValue::Err,
+                            formula: Some(rhs.to_string()),
+                        };
+                        self.set_cell(row, col, cell);
+                        self.last_status = "circular_reference".into();
+                        self.propagate_changes((row, col)); // <--- ADD THIS
+                        return Err("circular_reference".into());
+                    }
+                }
+                crate::dependency::Dependency::Range(r1, c1, r2, c2) => {
+                    if row >= *r1 && row <= *r2 && col >= *c1 && col <= *c2 {
+                        let cell = Cell {
+                            value: CellValue::Err,
+                            formula: Some(rhs.to_string()),
+                        };
+                        self.set_cell(row, col, cell);
+                        self.last_status = "circular_reference".into();
+                        self.propagate_changes((row, col)); // <--- ADD THIS
+                        return Err("circular_reference".into());
+                    }
+                }
+            }
+        }
+
+        // 3. Register dependencies
+        self.dependencies.clear_dependencies((row, col));
+        for dep in new_deps {
+            self.dependencies.add_dependency((row, col), dep);
+        }
+
+        // 4. Evaluate and Set
         if let Some((_op_pos, _op)) = Self::find_operator(rhs) {
             match self.parse_simple_expression(rhs) {
                 Ok(result) => {
                     let cell = Cell {
                         value: CellValue::Number(result),
-                        formula: None,
+                        formula: Some(rhs.to_string()),
                     };
                     self.set_cell(row, col, cell);
-                    return Ok(());
-                }
-                Err(e) => {
-                    let cell = match e.as_str() {
-                        "DIV0" => Cell {
-                            value: CellValue::Div0,
-                            formula: None,
-                        },
-                        _ => Cell {
-                            value: CellValue::Err,
-                            formula: None,
-                        },
-                    };
-                    self.set_cell(row, col, cell);
-                    return Err(e);
-                }
-            }
-        }
-
-        // CASE: range functions like SUM(A1:A10), MAX(A1:B3), STDEV(A2:A20)
-        if let Some(func_result) = self.handle_range_function(rhs) {
-            match func_result {
-                Ok(value) => {
-                    let cell = Cell {
-                        value,
-                        formula: None,
-                    };
-                    self.set_cell(row, col, cell);
+                    self.propagate_changes((row, col));
                     return Ok(());
                 }
                 Err(e) => {
                     let cell = Cell {
                         value: CellValue::Err,
-                        formula: None,
+                        formula: Some(rhs.to_string()),
                     };
                     self.set_cell(row, col, cell);
+                    self.propagate_changes((row, col));
                     return Err(e);
                 }
             }
         }
 
-        // If RHS is a numeric literal
+        if let Some(func_result) = self.handle_range_function(rhs) {
+            match func_result {
+                Ok(value) => {
+                    let cell = Cell {
+                        value,
+                        formula: Some(rhs.to_string()),
+                    };
+                    self.set_cell(row, col, cell);
+                    self.propagate_changes((row, col));
+                    return Ok(());
+                }
+                Err(e) => {
+                    let cell = Cell {
+                        value: CellValue::Err,
+                        formula: Some(rhs.to_string()),
+                    };
+                    self.set_cell(row, col, cell);
+                    self.propagate_changes((row, col));
+                    return Err(e);
+                }
+            }
+        }
+
         if let Ok(num) = rhs.parse::<f64>() {
             let cell = Cell {
                 value: CellValue::Number(num),
                 formula: None,
             };
             self.set_cell(row, col, cell);
+            self.propagate_changes((row, col));
             return Ok(());
         }
 
-        // If RHS is a cell reference
         if let Some((rr, cc)) = Self::parse_cell(rhs) {
             if let Some(src) = self.get_cell(rr, cc) {
-                // copy the CellValue as-is
                 let cell = Cell {
                     value: src.value.clone(),
-                    formula: None,
+                    formula: Some(rhs.to_string()),
                 };
                 self.set_cell(row, col, cell);
+                self.propagate_changes((row, col));
                 return Ok(());
             } else {
                 return Err("invalid_cell".into());
             }
         }
 
-        // otherwise invalid value for now (we're numeric-only)
         Err("invalid_value".into())
     }
 
@@ -856,5 +924,40 @@ impl Sheet {
         let result = self.eval_range(r1, c1, r2, c2, function);
 
         Some(Ok(result))
+    }
+
+    fn propagate_changes(&mut self, start_cell: (usize, usize)) {
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(start_cell);
+
+        // Avoid infinite loops
+        let mut visited = std::collections::HashSet::new();
+        visited.insert(start_cell);
+
+        while let Some(current) = queue.pop_front() {
+            let dependents = self.dependencies.get_dependents(current);
+
+            for dep in dependents {
+                if visited.contains(&dep) {
+                    continue;
+                }
+
+                // Re-evaluate dep
+                if let Some(cell) = self.get_cell(dep.0, dep.1) {
+                    if let Some(formula) = &cell.formula {
+                        let formula_clone = formula.clone();
+                        // Construct a command to re-evaluate the cell
+                        let cell_name = format!("{}{}", Self::col_to_name(dep.1), dep.0 + 1);
+                        let cmd = format!("{}={}", cell_name, formula_clone);
+
+                        // Ignore errors during propagation
+                        let _ = self.handle_assignment(&cmd);
+
+                        visited.insert(dep);
+                        queue.push_back(dep);
+                    }
+                }
+            }
+        }
     }
 }
