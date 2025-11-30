@@ -7,6 +7,7 @@ use super::cell::{Cell, CellValue};
 use super::region::Region;
 use crate::block::Block;
 use crate::dependency::DependencyManager;
+use crate::undo::UndoManager;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -31,6 +32,7 @@ pub struct Sheet {
     pub last_time: f64,
 
     pub dependencies: DependencyManager,
+    pub undo_manager: UndoManager,
 }
 
 impl Sheet {
@@ -46,6 +48,7 @@ impl Sheet {
             last_time: 0.0,
 
             dependencies: DependencyManager::new(),
+            undo_manager: UndoManager::new(),
         }
     }
 
@@ -157,9 +160,17 @@ impl Sheet {
         self.cursor_col = self.cursor_col.saturating_add(10);
     }
 
+    pub fn handle_assignment(&mut self, cleaned: &str) -> Result<(), String> {
+        self.handle_assignment_internal(cleaned, true) // Default: Record Undo
+    }
+
     /// Handle assignment like "A1=23" or "A1=B1" or "A1=1+2" or "A1=-3*-2"
     /// `cleaned` should be input with ALL whitespace removed (execute_command already does that).
-    pub fn handle_assignment(&mut self, cleaned: &str) -> Result<(), String> {
+    fn handle_assignment_internal(
+        &mut self,
+        cleaned: &str,
+        record_undo: bool,
+    ) -> Result<(), String> {
         let parts: Vec<&str> = cleaned.split('=').collect();
         if parts.len() != 2 {
             return Err("invalid_command".into());
@@ -170,6 +181,13 @@ impl Sheet {
         let (row, col) = match Self::parse_cell(lhs) {
             Some(x) => x,
             None => return Err("invalid_cell".into()),
+        };
+
+        // 0. Capture OLD state
+        let old_cell = if record_undo {
+            self.get_cell(row, col).cloned()
+        } else {
+            None
         };
 
         // 1. Collect dependencies
@@ -216,9 +234,20 @@ impl Sheet {
                             value: CellValue::Err,
                             formula: Some(rhs.to_string()),
                         };
+
+                        if record_undo {
+                            let op = crate::undo::Operation {
+                                row,
+                                col,
+                                old_cell: old_cell.clone(),
+                                new_cell: Some(cell.clone()),
+                            };
+                            self.undo_manager.push_operation(op);
+                        }
+
                         self.set_cell(row, col, cell);
                         self.last_status = "circular_reference".into();
-                        self.propagate_changes((row, col)); // <--- ADD THIS
+                        self.propagate_changes((row, col));
                         return Err("circular_reference".into());
                     }
                 }
@@ -228,9 +257,20 @@ impl Sheet {
                             value: CellValue::Err,
                             formula: Some(rhs.to_string()),
                         };
+
+                        if record_undo {
+                            let op = crate::undo::Operation {
+                                row,
+                                col,
+                                old_cell: old_cell.clone(),
+                                new_cell: Some(cell.clone()),
+                            };
+                            self.undo_manager.push_operation(op);
+                        }
+
                         self.set_cell(row, col, cell);
                         self.last_status = "circular_reference".into();
-                        self.propagate_changes((row, col)); // <--- ADD THIS
+                        self.propagate_changes((row, col));
                         return Err("circular_reference".into());
                     }
                 }
@@ -244,77 +284,84 @@ impl Sheet {
         }
 
         // 4. Evaluate and Set
-        if let Some((_op_pos, _op)) = Self::find_operator(rhs) {
+        let new_cell_result = if let Some((_op_pos, _op)) = Self::find_operator(rhs) {
             match self.parse_simple_expression(rhs) {
-                Ok(result) => {
-                    let cell = Cell {
-                        value: CellValue::Number(result),
-                        formula: Some(rhs.to_string()),
-                    };
-                    self.set_cell(row, col, cell);
-                    self.propagate_changes((row, col));
-                    return Ok(());
-                }
-                Err(e) => {
-                    let cell = Cell {
-                        value: CellValue::Err,
-                        formula: Some(rhs.to_string()),
-                    };
-                    self.set_cell(row, col, cell);
-                    self.propagate_changes((row, col));
-                    return Err(e);
-                }
+                Ok(result) => Ok(Cell {
+                    value: CellValue::Number(result),
+                    formula: Some(rhs.to_string()),
+                }),
+                Err(_) => Err(Cell {
+                    value: CellValue::Err,
+                    formula: Some(rhs.to_string()),
+                }),
             }
-        }
-
-        if let Some(func_result) = self.handle_range_function(rhs) {
+        } else if let Some(func_result) = self.handle_range_function(rhs) {
             match func_result {
-                Ok(value) => {
-                    let cell = Cell {
-                        value,
-                        formula: Some(rhs.to_string()),
-                    };
-                    self.set_cell(row, col, cell);
-                    self.propagate_changes((row, col));
-                    return Ok(());
-                }
-                Err(e) => {
-                    let cell = Cell {
-                        value: CellValue::Err,
-                        formula: Some(rhs.to_string()),
-                    };
-                    self.set_cell(row, col, cell);
-                    self.propagate_changes((row, col));
-                    return Err(e);
-                }
+                Ok(value) => Ok(Cell {
+                    value,
+                    formula: Some(rhs.to_string()),
+                }),
+                Err(_) => Err(Cell {
+                    value: CellValue::Err,
+                    formula: Some(rhs.to_string()),
+                }),
             }
-        }
-
-        if let Ok(num) = rhs.parse::<f64>() {
-            let cell = Cell {
+        } else if let Ok(num) = rhs.parse::<f64>() {
+            Ok(Cell {
                 value: CellValue::Number(num),
                 formula: None,
-            };
-            self.set_cell(row, col, cell);
-            self.propagate_changes((row, col));
-            return Ok(());
-        }
-
-        if let Some((rr, cc)) = Self::parse_cell(rhs) {
+            })
+        } else if let Some((rr, cc)) = Self::parse_cell(rhs) {
             if let Some(src) = self.get_cell(rr, cc) {
-                let cell = Cell {
+                Ok(Cell {
                     value: src.value.clone(),
                     formula: Some(rhs.to_string()),
-                };
+                })
+            } else {
+                Err(Cell {
+                    value: CellValue::Err,
+                    formula: Some(rhs.to_string()),
+                }) // Invalid cell ref
+            }
+        } else {
+            Err(Cell {
+                value: CellValue::Err,
+                formula: Some(rhs.to_string()),
+            }) // Invalid value
+        };
+
+        match new_cell_result {
+            Ok(cell) => {
+                if record_undo {
+                    let op = crate::undo::Operation {
+                        row,
+                        col,
+                        old_cell,
+                        new_cell: Some(cell.clone()),
+                    };
+                    self.undo_manager.push_operation(op);
+                }
+
                 self.set_cell(row, col, cell);
                 self.propagate_changes((row, col));
-                return Ok(());
-            } else {
-                return Err("invalid_cell".into());
+                Ok(())
+            }
+            Err(cell) => {
+                if record_undo {
+                    let op = crate::undo::Operation {
+                        row,
+                        col,
+                        old_cell,
+                        new_cell: Some(cell.clone()),
+                    };
+                    self.undo_manager.push_operation(op);
+                }
+
+                self.set_cell(row, col, cell);
+                self.propagate_changes((row, col));
+                Err("evaluation_error".into())
             }
         }
-
-        Err("invalid_value".into())
     }
 
     pub fn execute_command(&mut self, input: &str) -> bool {
@@ -342,9 +389,11 @@ impl Sheet {
         } else if upper == "D" {
             self.scroll_right();
         } else if upper == "U" {
-            // TODO: undo
+            //undo
+            self.undo();
         } else if upper == "R" {
-            // TODO: redo
+            // redo
+            self.redo();
         } else if upper == "DISABLE_OUTPUT" {
             self.output_enabled = false;
         } else if upper == "ENABLE_OUTPUT" {
@@ -951,7 +1000,7 @@ impl Sheet {
                         let cmd = format!("{}={}", cell_name, formula_clone);
 
                         // Ignore errors during propagation
-                        let _ = self.handle_assignment(&cmd);
+                        let _ = self.handle_assignment_internal(&cmd, false);
 
                         visited.insert(dep);
                         queue.push_back(dep);
@@ -959,5 +1008,87 @@ impl Sheet {
                 }
             }
         }
+    }
+
+    pub fn undo(&mut self) {
+        if let Some(op) = self.undo_manager.undo() {
+            // Restore old cell
+            if let Some(old_cell) = op.old_cell {
+                self.set_cell_and_update_deps(op.row, op.col, old_cell);
+            } else {
+                // Cell was empty before, so clear it (set to Empty)
+                let empty = Cell {
+                    value: CellValue::Empty,
+                    formula: None,
+                };
+                self.set_cell_and_update_deps(op.row, op.col, empty);
+            }
+            self.last_status = "undo".into();
+        } else {
+            self.last_status = "nothing_to_undo".into();
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Some(op) = self.undo_manager.redo() {
+            // Restore new cell
+            if let Some(new_cell) = op.new_cell {
+                self.set_cell_and_update_deps(op.row, op.col, new_cell);
+            } else {
+                let empty = Cell {
+                    value: CellValue::Empty,
+                    formula: None,
+                };
+                self.set_cell_and_update_deps(op.row, op.col, empty);
+            }
+            self.last_status = "redo".into();
+        } else {
+            self.last_status = "nothing_to_redo".into();
+        }
+    }
+
+    // Helper to set cell and trigger updates (used by undo/redo)
+    fn set_cell_and_update_deps(&mut self, row: usize, col: usize, cell: Cell) {
+        self.dependencies.clear_dependencies((row, col));
+
+        // Re-register dependencies from the restored formula
+        if let Some(formula) = &cell.formula {
+            let mut new_deps = Vec::new();
+
+            if let Some((_op_pos, _op)) = Self::find_operator(formula) {
+                let (op_pos, _) = Self::find_operator(formula).unwrap();
+                let left_part = &formula[..op_pos];
+                let right_part = &formula[op_pos + 1..];
+                if let Some((r, c)) = Self::parse_cell(left_part) {
+                    new_deps.push(crate::dependency::Dependency::Cell(r, c));
+                }
+                if let Some((r, c)) = Self::parse_cell(right_part) {
+                    new_deps.push(crate::dependency::Dependency::Cell(r, c));
+                }
+            }
+
+            if let Some(start_paren) = formula.find('(') {
+                if let Some(end_paren) = formula.find(')') {
+                    let inner = &formula[start_paren + 1..end_paren];
+                    if let Ok(((r1, c1), (r2, c2))) = Self::parse_range(inner) {
+                        new_deps.push(crate::dependency::Dependency::Range(r1, c1, r2, c2));
+                    }
+                }
+            }
+
+            if let Some((rr, cc)) = Self::parse_cell(formula) {
+                // Only add if it's NOT a pure number.
+                if formula.parse::<f64>().is_err() {
+                    new_deps.push(crate::dependency::Dependency::Cell(rr, cc));
+                }
+            }
+
+            for dep in new_deps {
+                self.dependencies.add_dependency((row, col), dep);
+            }
+        }
+
+        self.set_cell(row, col, cell);
+        self.propagate_changes((row, col));
     }
 }
