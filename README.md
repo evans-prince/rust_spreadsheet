@@ -43,6 +43,10 @@ cargo run -p cli
 
 Type commands at the prompt (see above). `q` to quit.
 
+## LIVE DEMO
+
+https://evans-prince.github.io/rust_spreadsheet/
+
 ## Tests
 
 Core logic in `spreadsheet_lib` is unit-testable independent of the CLI:
