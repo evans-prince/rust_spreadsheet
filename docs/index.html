@@ -25,13 +25,27 @@
       padding: 24px;
     }
     h1 { font-size: 18px; margin: 0 0 4px; }
-    p.sub { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+    p.sub { color: var(--muted); margin: 0 0 16px; font-size: 13px; max-width: 720px; }
+
+    #layout { display: flex; gap: 24px; align-items: flex-start; }
+    #main { flex: 1; min-width: 0; }
 
     #toolbar {
       display: flex;
       align-items: center;
       gap: 8px;
+      margin-bottom: 8px;
+    }
+    #commandRow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
       margin-bottom: 10px;
+    }
+    #commandRow .tag {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
     }
     #cellLabel {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -43,7 +57,7 @@
       text-align: center;
       color: var(--accent);
     }
-    #formulaBar {
+    #formulaBar, #commandBar {
       flex: 1;
       background: var(--panel);
       border: 1px solid var(--border);
@@ -53,7 +67,7 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 13px;
     }
-    #formulaBar:focus { outline: 1px solid var(--accent); }
+    #formulaBar:focus, #commandBar:focus { outline: 1px solid var(--accent); }
     button {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -119,38 +133,112 @@
       padding: 1px 5px;
     }
     #loading { color: var(--muted); font-size: 13px; }
+
+    #sidebar {
+      width: 240px;
+      flex-shrink: 0;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px;
+    }
+    #sidebar h2 {
+      font-size: 12px;
+      margin: 0 0 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .example-label {
+      font-size: 11px;
+      color: var(--muted);
+      margin: 14px 0 6px;
+    }
+    .example-label:first-of-type { margin-top: 0; }
+    button.example {
+      display: block;
+      width: 100%;
+      text-align: left;
+      margin-bottom: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      background: var(--bg);
+    }
+    button.example:hover { border-color: var(--accent); color: var(--accent); }
+
+    @media (max-width: 820px) {
+      #layout { flex-direction: column; }
+      #sidebar { width: 100%; }
+    }
   </style>
 </head>
 <body>
   <h1>rust_spreadsheet</h1>
   <p class="sub">
-    The real spreadsheet engine (formula evaluation, dependency tracking, undo/redo)
-    compiled to WebAssembly and running entirely in this browser tab -- no server involved.
+    The real spreadsheet engine (formula evaluation, dependency tracking, undo/redo,
+    viewport scrolling) compiled to WebAssembly and running entirely in this browser
+    tab -- no server involved.
   </p>
 
   <div id="loading">Loading WASM module...</div>
 
   <div id="app" style="display:none">
-    <div id="toolbar">
-      <div id="cellLabel">A1</div>
-      <input id="formulaBar" type="text" placeholder="e.g. 23   or   =A1+B2   or   =SUM(A1:A5)" autocomplete="off" />
-      <button id="undoBtn">Undo</button>
-      <button id="redoBtn">Redo</button>
-      <button id="clearBtn">Clear</button>
-    </div>
+    <div id="layout">
+      <div id="main">
+        <div id="toolbar">
+          <div id="cellLabel">A1</div>
+          <input id="formulaBar" type="text" placeholder="e.g. 23   or   =A1+B2   or   =SUM(A1:A5)" autocomplete="off" />
+          <button id="undoBtn">Undo</button>
+          <button id="redoBtn">Redo</button>
+          <button id="clearBtn">Clear</button>
+        </div>
 
-    <div style="overflow:auto; max-height: 70vh;">
-      <table id="grid"></table>
-    </div>
+        <div id="commandRow">
+          <span class="tag">Command</span>
+          <input id="commandBar" type="text" placeholder="raw engine command -- e.g. W, S, A, D, U, R, SCROLL_TO B5" autocomplete="off" />
+          <button id="runCommandBtn">Run</button>
+        </div>
 
-    <div id="status">ready</div>
+        <div style="overflow:auto; max-height: 60vh;">
+          <table id="grid"></table>
+        </div>
 
-    <div id="help">
-      Click a cell, type a value or formula into the bar above, press <code>Enter</code>.
-      Formulas: <code>A1+B2</code>, <code>A1-B2</code>, <code>A1*B2</code>, <code>A1/B2</code>,
-      <code>SUM(A1:A10)</code>, <code>AVG(...)</code>, <code>MIN(...)</code>, <code>MAX(...)</code>,
-      <code>STDEV(...)</code>. Referencing another cell auto-tracks the dependency, so changing
-      A1 recalculates anything that depends on it. Circular references are detected and rejected.
+        <div id="status">ready</div>
+
+        <div id="help">
+          Click a cell, type a value or formula into the top bar, press <code>Enter</code>.
+          Formulas: <code>A1+B2</code>, <code>A1-B2</code>, <code>A1*B2</code>, <code>A1/B2</code>,
+          <code>SUM(A1:A10)</code>, <code>AVG(...)</code>, <code>MIN(...)</code>, <code>MAX(...)</code>,
+          <code>STDEV(...)</code>. Referencing another cell auto-tracks the dependency, so changing
+          A1 recalculates anything that depends on it. Circular references are detected and rejected.
+          <br /><br />
+          The grid you see is a 20x10 <em>window</em> into a much larger sheet -- the
+          <code>Command</code> box sends raw commands straight to the engine (same syntax as the
+          original CLI), including <code>W</code>/<code>A</code>/<code>S</code>/<code>D</code> to
+          scroll that window and <code>SCROLL_TO &lt;cell&gt;</code> to jump to it directly.
+        </div>
+      </div>
+
+      <div id="sidebar">
+        <h2>Try it</h2>
+
+        <div class="example-label">Formula bar (select a cell first)</div>
+        <button class="example" data-target="formula" data-value="42">42</button>
+        <button class="example" data-target="formula" data-value="=A1+B2">=A1+B2</button>
+        <button class="example" data-target="formula" data-value="=A1*B2">=A1*B2</button>
+        <button class="example" data-target="formula" data-value="=SUM(A1:A5)">=SUM(A1:A5)</button>
+        <button class="example" data-target="formula" data-value="=AVG(A1:A5)">=AVG(A1:A5)</button>
+        <button class="example" data-target="formula" data-value="=STDEV(A1:A10)">=STDEV(A1:A10)</button>
+
+        <div class="example-label">Command box (raw engine commands)</div>
+        <button class="example" data-target="command" data-value="W">W -- scroll up</button>
+        <button class="example" data-target="command" data-value="S">S -- scroll down</button>
+        <button class="example" data-target="command" data-value="A">A -- scroll left</button>
+        <button class="example" data-target="command" data-value="D">D -- scroll right</button>
+        <button class="example" data-target="command" data-value="SCROLL_TO B5">SCROLL_TO B5</button>
+        <button class="example" data-target="command" data-value="U">U -- undo</button>
+        <button class="example" data-target="command" data-value="R">R -- redo</button>
+      </div>
     </div>
   </div>
 

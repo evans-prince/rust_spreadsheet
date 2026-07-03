@@ -1,5 +1,8 @@
 import init, { SpreadsheetApp } from "./pkg/wasm_app.js";
 
+// Size of the visible window into the sheet. The sheet itself is much
+// bigger than this (same sparse region/block structure as the CLI) --
+// this is just how many cells we render on screen at once.
 const ROWS = 20;
 const COLS = 10;
 
@@ -20,19 +23,22 @@ function cellName(row, col) {
 }
 
 let app;
-let selected = { row: 0, col: 0 };
+let selected = { row: 0, col: 0 }; // local (visible-window) coordinates
+let rowOffset = 0; // absolute sheet row shown at the top of the window
+let colOffset = 0; // absolute sheet col shown at the left of the window
 
 const gridEl = document.getElementById("grid");
 const formulaBar = document.getElementById("formulaBar");
+const commandBar = document.getElementById("commandBar");
 const cellLabel = document.getElementById("cellLabel");
 const statusEl = document.getElementById("status");
 
 function buildGrid() {
   let html = "<thead><tr><th></th>";
-  for (let c = 0; c < COLS; c++) html += `<th>${colName(c)}</th>`;
+  for (let c = 0; c < COLS; c++) html += `<th></th>`;
   html += "</tr></thead><tbody>";
   for (let r = 0; r < ROWS; r++) {
-    html += `<tr><td class="rowhead">${r + 1}</td>`;
+    html += `<tr><td class="rowhead"></td>`;
     for (let c = 0; c < COLS; c++) {
       html += `<td class="cell" data-row="${r}" data-col="${c}" id="cell-${r}-${c}"></td>`;
     }
@@ -48,10 +54,23 @@ function buildGrid() {
   });
 }
 
+// Column/row headers depend on the current viewport offset, so they're
+// redrawn separately from the grid skeleton (which never changes shape).
+function updateHeaders() {
+  const headThs = gridEl.querySelectorAll("thead th");
+  for (let c = 0; c < COLS; c++) {
+    headThs[c + 1].textContent = colName(colOffset + c);
+  }
+  const rowheads = gridEl.querySelectorAll("td.rowhead");
+  rowheads.forEach((td, r) => {
+    td.textContent = rowOffset + r + 1;
+  });
+}
+
 function renderAll() {
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
-      const val = app.get_cell(r, c);
+      const val = app.get_cell(rowOffset + r, colOffset + c);
       const td = document.getElementById(`cell-${r}-${c}`);
       td.textContent = val;
       td.classList.toggle("err", val === "ERR" || val === "DIV0");
@@ -59,14 +78,17 @@ function renderAll() {
   }
 }
 
-function selectCell(row, col) {
+function selectCell(localRow, localCol) {
   const prev = document.getElementById(`cell-${selected.row}-${selected.col}`);
   if (prev) prev.classList.remove("selected");
-  selected = { row, col };
-  const cur = document.getElementById(`cell-${row}-${col}`);
+  selected = { row: localRow, col: localCol };
+  const cur = document.getElementById(`cell-${localRow}-${localCol}`);
   if (cur) cur.classList.add("selected");
-  cellLabel.textContent = cellName(row, col);
-  formulaBar.value = app.get_formula(row, col) || app.get_cell(row, col);
+
+  const absRow = rowOffset + localRow;
+  const absCol = colOffset + localCol;
+  cellLabel.textContent = cellName(absRow, absCol);
+  formulaBar.value = app.get_formula(absRow, absCol) || app.get_cell(absRow, absCol);
   formulaBar.focus();
 }
 
@@ -75,17 +97,41 @@ function setStatus(status, ms) {
   statusEl.innerHTML = `<span class="${ok ? "ok" : "bad"}">${status}</span> -- ${ms.toFixed(3)} ms`;
 }
 
+// Called after every engine command (formula bar, raw command, undo, redo):
+// the viewport may have moved (W/A/S/D/SCROLL_TO), so re-sync it from the
+// engine's own cursor position rather than assuming it didn't change.
+function afterCommand() {
+  rowOffset = app.cursor_row();
+  colOffset = app.cursor_col();
+  updateHeaders();
+  renderAll();
+  setStatus(app.status(), app.last_time_ms());
+}
+
 function commit() {
   const raw = formulaBar.value.trim();
-  const name = cellName(selected.row, selected.col);
+  const absRow = rowOffset + selected.row;
+  const absCol = colOffset + selected.col;
+  const name = cellName(absRow, absCol);
   // Accept both "23" and Excel-style "=A1+B2" input.
   const rhs = raw.startsWith("=") ? raw.slice(1) : raw;
   const cmd = rhs === "" ? `${name}=0` : `${name}=${rhs}`;
   app.execute(cmd);
-  renderAll();
-  setStatus(app.status(), app.last_time_ms());
+  afterCommand();
   // Move selection down a row, like Excel/Sheets does on Enter.
   selectCell(Math.min(selected.row + 1, ROWS - 1), selected.col);
+}
+
+function runRawCommand() {
+  const raw = commandBar.value.trim();
+  if (raw === "") return;
+  app.execute(raw);
+  afterCommand();
+  // Selection may now be pointing at different cell content if the
+  // viewport moved -- refresh the formula bar/label for it.
+  selectCell(selected.row, selected.col);
+  commandBar.value = "";
+  commandBar.focus();
 }
 
 formulaBar.addEventListener("keydown", (e) => {
@@ -95,31 +141,50 @@ formulaBar.addEventListener("keydown", (e) => {
   }
 });
 
+commandBar.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    runRawCommand();
+  }
+});
+
+document.getElementById("runCommandBtn").addEventListener("click", runRawCommand);
+
 document.getElementById("undoBtn").addEventListener("click", () => {
   app.execute("U");
-  renderAll();
-  setStatus(app.status(), app.last_time_ms());
+  afterCommand();
   selectCell(selected.row, selected.col);
 });
 
 document.getElementById("redoBtn").addEventListener("click", () => {
   app.execute("R");
-  renderAll();
-  setStatus(app.status(), app.last_time_ms());
+  afterCommand();
   selectCell(selected.row, selected.col);
 });
 
 document.getElementById("clearBtn").addEventListener("click", () => {
   app = new SpreadsheetApp();
-  renderAll();
-  setStatus("cleared", 0);
+  afterCommand();
+  selected = { row: 0, col: 0 };
   selectCell(0, 0);
+  setStatus("cleared", 0);
+});
+
+// Sidebar example chips: fill the relevant input and focus it (doesn't
+// auto-run, so formula examples work correctly once you've picked a cell).
+document.querySelectorAll(".example").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const target = btn.dataset.target === "formula" ? formulaBar : commandBar;
+    target.value = btn.dataset.value;
+    target.focus();
+  });
 });
 
 async function main() {
   await init();
   app = new SpreadsheetApp();
   buildGrid();
+  updateHeaders();
   renderAll();
   selectCell(0, 0);
   document.getElementById("loading").style.display = "none";

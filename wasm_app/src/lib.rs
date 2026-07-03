@@ -68,6 +68,18 @@ impl SpreadsheetApp {
     pub fn redo(&mut self) {
         self.sheet.redo();
     }
+
+    /// Top-left row of the current viewport. Moves when "W"/"S"/"SCROLL_TO"
+    /// commands are executed, exactly like the CLI's scrolling window.
+    pub fn cursor_row(&self) -> u32 {
+        self.sheet.cursor_row as u32
+    }
+
+    /// Top-left column of the current viewport. Moves when "A"/"D"/"SCROLL_TO"
+    /// commands are executed.
+    pub fn cursor_col(&self) -> u32 {
+        self.sheet.cursor_col as u32
+    }
 }
 
 impl Default for SpreadsheetApp {
