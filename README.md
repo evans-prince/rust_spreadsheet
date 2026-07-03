@@ -1,3 +1,4 @@
+
 # rust_spreadsheet
 
 A terminal spreadsheet engine written in Rust — vim-style navigation, cell formulas with dependency tracking, range functions, and full undo/redo, all built on a Cargo workspace with the core logic cleanly separated from the CLI.
@@ -47,6 +48,8 @@ Type commands at the prompt (see above). `q` to quit.
 
 https://evans-prince.github.io/rust_spreadsheet/
 
+![rust_spreadsheet live demo](rust-spreadsheet-demo.gif)
+
 ## Tests
 
 Core logic in `spreadsheet_lib` is unit-testable independent of the CLI:
@@ -54,3 +57,4 @@ Core logic in `spreadsheet_lib` is unit-testable independent of the CLI:
 ```bash
 cargo test -p spreadsheet_lib
 ```
+
