@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Drop-in replacement for std::time::Instant that also works on wasm32
+# (std::time::Instant panics on wasm32-unknown-unknown since there's no
+# native clock -- web-time uses `Performance.now()` in the browser instead,
+# and just re-exports std::time on every other target).
+web-time = "1.1"

@@ -9,7 +9,7 @@ use crate::block::Block;
 use crate::dependency::DependencyManager;
 use crate::undo::UndoManager;
 use std::collections::HashMap;
-use std::time::Instant;
+use web_time::Instant;
 
 #[derive(Debug, Clone, Copy)]
 pub enum RangeFunction {
@@ -936,7 +936,17 @@ impl Sheet {
         if upper.starts_with("SLEEP(") && upper.ends_with(')') {
             let inner = &upper[6..upper.len() - 1];
             if let Ok(seconds) = inner.parse::<u64>() {
-                std::thread::sleep(std::time::Duration::from_secs(seconds));
+                // std::thread::sleep panics on wasm32-unknown-unknown (no threads in the
+                // browser sandbox), so treat SLEEP() as a no-op there instead of a real
+                // blocking sleep. Native builds (CLI/server) keep the original behavior.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = seconds;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    std::thread::sleep(std::time::Duration::from_secs(seconds));
+                }
                 return Some(Ok(CellValue::Empty)); // sleep produces no numeric value
             } else {
                 return Some(Err("invalid_sleep".into()));

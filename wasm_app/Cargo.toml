@@ -1,0 +1,11 @@
+[package]
+name = "wasm_app"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+spreadsheet_lib = { path = "../spreadsheet_lib" }
+wasm-bindgen = "0.2"
