@@ -1,10 +1,18 @@
-import init, { SpreadsheetApp } from "./pkg/wasm_app.js";
+// Cache-busting: bump this alongside the ?v=N on the <script> tag in
+// index.html whenever this file or the wasm build changes, otherwise
+// browsers/GitHub Pages' CDN can keep serving a stale cached copy.
+// NOTE: static `import` specifiers must be string literals (can't use a
+// template/variable here) -- bump this literally, and bump ASSET_VERSION
+// below (used for the .wasm fetch) and index.html's ?v=N to match.
+import init, { SpreadsheetApp } from "./pkg/wasm_app.js?v=3";
+const ASSET_VERSION = 3;
 
 // Size of the visible window into the sheet. The sheet itself is much
 // bigger than this (same sparse region/block structure as the CLI) --
-// this is just how many cells we render on screen at once.
-const ROWS = 20;
-const COLS = 10;
+// these are just how many cells we render on screen at once, and can be
+// changed at runtime via the "New sheet" control.
+let ROWS = 100;
+let COLS = 100;
 
 function colName(col) {
   let n = col;
@@ -32,7 +40,12 @@ const formulaBar = document.getElementById("formulaBar");
 const commandBar = document.getElementById("commandBar");
 const cellLabel = document.getElementById("cellLabel");
 const statusEl = document.getElementById("status");
+const newRowsInput = document.getElementById("newRows");
+const newColsInput = document.getElementById("newCols");
 
+// Grid is rebuilt from scratch whenever ROWS/COLS change (e.g. "New Sheet").
+// Cell clicks are handled with ONE delegated listener on the table instead
+// of one listener per cell -- matters once this is 100x100 = 10,000 cells.
 function buildGrid() {
   let html = "<thead><tr><th></th>";
   for (let c = 0; c < COLS; c++) html += `<th></th>`;
@@ -46,16 +59,17 @@ function buildGrid() {
   }
   html += "</tbody>";
   gridEl.innerHTML = html;
-
-  gridEl.querySelectorAll("td.cell").forEach((td) => {
-    td.addEventListener("click", () => {
-      selectCell(parseInt(td.dataset.row, 10), parseInt(td.dataset.col, 10));
-    });
-  });
 }
 
+gridEl.addEventListener("click", (e) => {
+  const td = e.target.closest("td.cell");
+  if (!td) return;
+  selectCell(parseInt(td.dataset.row, 10), parseInt(td.dataset.col, 10));
+});
+
 // Column/row headers depend on the current viewport offset, so they're
-// redrawn separately from the grid skeleton (which never changes shape).
+// redrawn separately from the grid skeleton (which only needs rebuilding
+// when ROWS/COLS themselves change).
 function updateHeaders() {
   const headThs = gridEl.querySelectorAll("thead th");
   for (let c = 0; c < COLS; c++) {
@@ -134,6 +148,23 @@ function runRawCommand() {
   commandBar.focus();
 }
 
+function newSheet() {
+  const requestedRows = parseInt(newRowsInput.value, 10);
+  const requestedCols = parseInt(newColsInput.value, 10);
+  ROWS = Number.isFinite(requestedRows) && requestedRows > 0 ? requestedRows : 100;
+  COLS = Number.isFinite(requestedCols) && requestedCols > 0 ? requestedCols : 100;
+
+  app = new SpreadsheetApp();
+  rowOffset = 0;
+  colOffset = 0;
+  selected = { row: 0, col: 0 };
+  buildGrid();
+  updateHeaders();
+  renderAll();
+  selectCell(0, 0);
+  setStatus("new sheet", 0);
+}
+
 formulaBar.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
     e.preventDefault();
@@ -149,6 +180,7 @@ commandBar.addEventListener("keydown", (e) => {
 });
 
 document.getElementById("runCommandBtn").addEventListener("click", runRawCommand);
+document.getElementById("newSheetBtn").addEventListener("click", newSheet);
 
 document.getElementById("undoBtn").addEventListener("click", () => {
   app.execute("U");
@@ -181,7 +213,7 @@ document.querySelectorAll(".example").forEach((btn) => {
 });
 
 async function main() {
-  await init();
+  await init({ module_or_path: `./pkg/wasm_app_bg.wasm?v=${ASSET_VERSION}` });
   app = new SpreadsheetApp();
   buildGrid();
   updateHeaders();

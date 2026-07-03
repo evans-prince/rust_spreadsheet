@@ -100,11 +100,19 @@
       font-weight: 500;
       position: sticky;
       top: 0;
+      z-index: 2;
+    }
+    th:first-child {
+      left: 0;
+      z-index: 3;
     }
     td.rowhead {
       background: var(--panel);
       color: var(--muted);
       text-align: center;
+      position: sticky;
+      left: 0;
+      z-index: 1;
     }
     td.cell { cursor: cell; color: var(--text); }
     td.cell.selected { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--accent-bg); }
@@ -170,6 +178,25 @@
       #layout { flex-direction: column; }
       #sidebar { width: 100%; }
     }
+
+    #sizeRow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    #sizeRow input[type="number"] {
+      width: 64px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      padding: 5px 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
@@ -199,6 +226,15 @@
           <button id="runCommandBtn">Run</button>
         </div>
 
+        <div id="sizeRow">
+          <span>New sheet:</span>
+          <input id="newRows" type="number" min="1" max="1000" value="100" />
+          <span>rows x</span>
+          <input id="newCols" type="number" min="1" max="500" value="100" />
+          <span>cols</span>
+          <button id="newSheetBtn">New Sheet</button>
+        </div>
+
         <div style="overflow:auto; max-height: 60vh;">
           <table id="grid"></table>
         </div>
@@ -212,10 +248,11 @@
           <code>STDEV(...)</code>. Referencing another cell auto-tracks the dependency, so changing
           A1 recalculates anything that depends on it. Circular references are detected and rejected.
           <br /><br />
-          The grid you see is a 20x10 <em>window</em> into a much larger sheet -- the
-          <code>Command</code> box sends raw commands straight to the engine (same syntax as the
-          original CLI), including <code>W</code>/<code>A</code>/<code>S</code>/<code>D</code> to
-          scroll that window and <code>SCROLL_TO &lt;cell&gt;</code> to jump to it directly.
+          The grid you see is a <em>window</em> into a much larger sheet (100x100 by default,
+          resizable with "New sheet" above) -- the <code>Command</code> box sends raw commands
+          straight to the engine (same syntax as the original CLI), including
+          <code>W</code>/<code>A</code>/<code>S</code>/<code>D</code> to scroll that window and
+          <code>SCROLL_TO &lt;cell&gt;</code> to jump to it directly.
         </div>
       </div>
 
@@ -242,6 +279,11 @@
     </div>
   </div>
 
-  <script type="module" src="./app.js"></script>
+  <!--
+    Cache-busting: GitHub Pages caches static assets, so browsers can keep
+    running an old app.js after a new one is deployed unless the URL
+    changes. Bump this version number (?v=N) every time app.js changes.
+  -->
+  <script type="module" src="./app.js?v=3"></script>
 </body>
 </html>
