@@ -5,6 +5,16 @@ export class SpreadsheetApp {
     free(): void;
     [Symbol.dispose](): void;
     /**
+     * Top-left column of the current viewport. Moves when "A"/"D"/"SCROLL_TO"
+     * commands are executed.
+     */
+    cursor_col(): number;
+    /**
+     * Top-left row of the current viewport. Moves when "W"/"S"/"SCROLL_TO"
+     * commands are executed, exactly like the CLI's scrolling window.
+     */
+    cursor_row(): number;
+    /**
      * Run one command, e.g. "A1=23", "B2=A1+10", "C1=SUM(A1:A10)", "U" (undo), "R" (redo).
      * Returns false only for the quit command ("Q"); true otherwise.
      */
@@ -39,6 +49,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_spreadsheetapp_free: (a: number, b: number) => void;
+    readonly spreadsheetapp_cursor_col: (a: number) => number;
+    readonly spreadsheetapp_cursor_row: (a: number) => number;
     readonly spreadsheetapp_execute: (a: number, b: number, c: number) => number;
     readonly spreadsheetapp_get_cell: (a: number, b: number, c: number) => [number, number];
     readonly spreadsheetapp_get_formula: (a: number, b: number, c: number) => [number, number];

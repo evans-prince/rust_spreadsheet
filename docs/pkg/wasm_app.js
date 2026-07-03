@@ -12,6 +12,24 @@ export class SpreadsheetApp {
         wasm.__wbg_spreadsheetapp_free(ptr, 0);
     }
     /**
+     * Top-left column of the current viewport. Moves when "A"/"D"/"SCROLL_TO"
+     * commands are executed.
+     * @returns {number}
+     */
+    cursor_col() {
+        const ret = wasm.spreadsheetapp_cursor_col(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * Top-left row of the current viewport. Moves when "W"/"S"/"SCROLL_TO"
+     * commands are executed, exactly like the CLI's scrolling window.
+     * @returns {number}
+     */
+    cursor_row() {
+        const ret = wasm.spreadsheetapp_cursor_row(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
      * Run one command, e.g. "A1=23", "B2=A1+10", "C1=SUM(A1:A10)", "U" (undo), "R" (redo).
      * Returns false only for the quit command ("Q"); true otherwise.
      * @param {string} input

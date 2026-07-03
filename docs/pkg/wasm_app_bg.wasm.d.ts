@@ -2,6 +2,8 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const __wbg_spreadsheetapp_free: (a: number, b: number) => void;
+export const spreadsheetapp_cursor_col: (a: number) => number;
+export const spreadsheetapp_cursor_row: (a: number) => number;
 export const spreadsheetapp_execute: (a: number, b: number, c: number) => number;
 export const spreadsheetapp_get_cell: (a: number, b: number, c: number) => [number, number];
 export const spreadsheetapp_get_formula: (a: number, b: number, c: number) => [number, number];
