@@ -985,39 +985,71 @@ impl Sheet {
         Some(Ok(result))
     }
 
+    /// Recalculate everything downstream of `start_cell`.
+    ///
+    /// Collects all transitively dependent cells once, orders them topologically
+    /// (reverse DFS post-order), then re-evaluates each cell exactly once, so a
+    /// chain of n dependents costs O(n) instead of growing exponentially.
     fn propagate_changes(&mut self, start_cell: (usize, usize)) {
-        let mut queue = std::collections::VecDeque::new();
-        queue.push_back(start_cell);
-
-        // Avoid infinite loops
+        let mut order = Vec::new();
         let mut visited = std::collections::HashSet::new();
-        visited.insert(start_cell);
-
-        while let Some(current) = queue.pop_front() {
-            let dependents = self.dependencies.get_dependents(current);
-
-            for dep in dependents {
-                if visited.contains(&dep) {
-                    continue;
-                }
-
-                // Re-evaluate dep
-                if let Some(cell) = self.get_cell(dep.0, dep.1) {
-                    if let Some(formula) = &cell.formula {
-                        let formula_clone = formula.clone();
-                        // Construct a command to re-evaluate the cell
-                        let cell_name = format!("{}{}", Self::col_to_name(dep.1), dep.0 + 1);
-                        let cmd = format!("{}={}", cell_name, formula_clone);
-
-                        // Ignore errors during propagation
-                        let _ = self.handle_assignment_internal(&cmd, false);
-
-                        visited.insert(dep);
-                        queue.push_back(dep);
-                    }
+        let mut stack = vec![(start_cell, false)];
+        while let Some((node, expanded)) = stack.pop() {
+            if expanded {
+                order.push(node);
+                continue;
+            }
+            if !visited.insert(node) {
+                continue;
+            }
+            stack.push((node, true));
+            for dep in self.dependencies.get_dependents(node) {
+                if !visited.contains(&dep) {
+                    stack.push((dep, false));
                 }
             }
         }
+        order.reverse(); // start_cell first, then each cell after all of its providers
+
+        for (r, c) in order.into_iter().skip(1) {
+            let formula = match self.get_cell(r, c).and_then(|cell| cell.formula.clone()) {
+                Some(f) => f,
+                None => continue,
+            };
+            let value = self.evaluate_formula(&formula);
+            self.set_cell(
+                r,
+                c,
+                Cell {
+                    value,
+                    formula: Some(formula),
+                },
+            );
+        }
+    }
+
+    /// Evaluate a stored formula against the current sheet without touching
+    /// dependencies, undo history or propagation (same rules as assignment).
+    fn evaluate_formula(&self, rhs: &str) -> CellValue {
+        if Self::find_operator(rhs).is_some() {
+            return match self.parse_simple_expression(rhs) {
+                Ok(v) => CellValue::Number(v),
+                Err(_) => CellValue::Err,
+            };
+        }
+        if let Some(func_result) = self.handle_range_function(rhs) {
+            return func_result.unwrap_or(CellValue::Err);
+        }
+        if let Ok(num) = rhs.parse::<f64>() {
+            return CellValue::Number(num);
+        }
+        if let Some((rr, cc)) = Self::parse_cell(rhs) {
+            return match self.get_cell(rr, cc) {
+                Some(src) => src.value.clone(),
+                None => CellValue::Err,
+            };
+        }
+        CellValue::Err
     }
 
     pub fn undo(&mut self) {
